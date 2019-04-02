@@ -77,6 +77,7 @@ def add_extension(path):
 def read_pairs(pairs_filename):
     pairs = []
     with open(pairs_filename, 'r') as f:
+        # XN: remove the 1st row.
         for line in f.readlines()[1:]:
             pair = line.strip().split()
             pairs.append(pair)

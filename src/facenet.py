@@ -108,6 +108,8 @@ def create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batc
         for filename in tf.unstack(filenames):
             file_contents = tf.read_file(filename)
             image = tf.image.decode_image(file_contents, 3)
+            # Ref: https://www.tensorflow.org/api_docs/python/tf/cond
+            # tf.cond(pred, true_fn, false_fn) returns true_fn() if the predicate pred is true else false_fn()
             image = tf.cond(get_control_flag(control[0], RANDOM_ROTATE),
                             lambda:tf.py_func(random_rotate_image, [image], tf.uint8), 
                             lambda:tf.identity(image))
