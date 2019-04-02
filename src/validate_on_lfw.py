@@ -89,10 +89,16 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
     print('Runnning forward pass on LFW images')
     
     # Enqueue one epoch of image paths and labels
+    # debug: len(actual_issame)=6000 (3000 pairs of the same people, and 3000 pairs of the different people)
+    # nrof_embeddings = 12000, since there are two images for each pair
+    # nrof_images = 24000, since each image is flipped.
     nrof_embeddings = len(actual_issame)*2  # nrof_pairs * nrof_images_per_pair
     nrof_flips = 2 if use_flipped_images else 1
     nrof_images = nrof_embeddings * nrof_flips
+    # derive a (n,1) array from the (n,) array.
+    # debug: labels_array is (24000, 1), [0; 1;...23999]
     labels_array = np.expand_dims(np.arange(0,nrof_images),1)
+    # debug: image_paths_array is (24000, 1), each path is repeated twice.
     image_paths_array = np.expand_dims(np.repeat(np.array(image_paths),nrof_flips),1)
     control_array = np.zeros_like(labels_array, np.int32)
     if use_fixed_image_standardization:
@@ -107,8 +113,12 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
     nrof_batches = nrof_images // batch_size
     emb_array = np.zeros((nrof_images, embedding_size))
     lab_array = np.zeros((nrof_images,))
+    # debug: nrof_batches is 240 (24000 images/100 images per batch)
     for i in range(nrof_batches):
         feed_dict = {phase_train_placeholder:False, batch_size_placeholder:batch_size}
+        # As can be seen from main, embeddings is the output of the graph.
+        # labels is label_batch in main, and seems to be the input.
+        # debug: emb is (100, 512)
         emb, lab = sess.run([embeddings, labels], feed_dict=feed_dict)
         lab_array[lab] = lab
         emb_array[lab, :] = emb
@@ -116,17 +126,29 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
             print('.', end='')
             sys.stdout.flush()
     print('')
+    # debug: nrof_embeddings = 12000, embedding_size=512, nrof_flips=2
     embeddings = np.zeros((nrof_embeddings, embedding_size*nrof_flips))
     if use_flipped_images:
         # Concatenate embeddings for flipped and non flipped version of the images
+        # embeddings is (12000, 1024)
+        # fill the left half
         embeddings[:,:embedding_size] = emb_array[0::2,:]
+        # fill the right half
         embeddings[:,embedding_size:] = emb_array[1::2,:]
     else:
         embeddings = emb_array
 
     assert np.array_equal(lab_array, np.arange(nrof_images))==True, 'Wrong labels used for evaluation, possibly caused by training examples left in the input pipeline'
     tpr, fpr, accuracy, val, val_std, far = lfw.evaluate(embeddings, actual_issame, nrof_folds=nrof_folds, distance_metric=distance_metric, subtract_mean=subtract_mean)
-    
+
+    # The mean/std of Accuracy is derived by the optimal accuracy criteria,
+    # while the validation rate is derived by the far target criteria,
+    # so the accuracy is higher than validation rate,
+    # e.g., debugging results for lfw:
+    # Accuracy: 0.99550 + -0.00342
+    # Validation rate: 0.98600 + -0.00975 @ FAR = 0.00100
+    # Area Under Curve(AUC): 1.000
+    # Equal Error Rate(EER): 0.004
     print('Accuracy: %2.5f+-%2.5f' % (np.mean(accuracy), np.std(accuracy)))
     print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
     

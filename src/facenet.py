@@ -119,6 +119,9 @@ def create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batc
             image = tf.cond(get_control_flag(control[0], RANDOM_FLIP),
                             lambda:tf.image.random_flip_left_right(image),
                             lambda:tf.identity(image))
+            # Fixed standardization vs. per image standardization.
+            # use_fixed_image_standardization is used in
+            # https://github.com/davidsandberg/facenet/wiki/Validate-on-lfw
             image = tf.cond(get_control_flag(control[0], FIXED_STANDARDIZATION),
                             lambda:(tf.cast(image, tf.float32) - 127.5)/128.0,
                             lambda:tf.image.per_image_standardization(image))
@@ -416,6 +419,7 @@ def distance(embeddings1, embeddings2, distance_metric=0):
         # Distance based on cosine similarity
         dot = np.sum(np.multiply(embeddings1, embeddings2), axis=1)
         norm = np.linalg.norm(embeddings1, axis=1) * np.linalg.norm(embeddings2, axis=1)
+        # debug: similarity is (6000,), i.e., the correlation for each pair.
         similarity = dot / norm
         dist = np.arccos(similarity) / math.pi
     else:
@@ -423,6 +427,7 @@ def distance(embeddings1, embeddings2, distance_metric=0):
         
     return dist
 
+# roc: ratio of correctness?
 def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_folds=10, distance_metric=0, subtract_mean=False):
     assert(embeddings1.shape[0] == embeddings2.shape[0])
     assert(embeddings1.shape[1] == embeddings2.shape[1])
@@ -435,9 +440,11 @@ def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_fold
     accuracy = np.zeros((nrof_folds))
     
     indices = np.arange(nrof_pairs)
-    
+
+    # debug: for fold_idx=0, train_set is [600, 601, ...5999], test_set is [0,1,..599]
     for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
         if subtract_mean:
+            # debug: mean is (1, 1024)
             mean = np.mean(np.concatenate([embeddings1[train_set], embeddings2[train_set]]), axis=0)
         else:
           mean = 0.0
@@ -450,26 +457,45 @@ def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_fold
         best_threshold_index = np.argmax(acc_train)
         for threshold_idx, threshold in enumerate(thresholds):
             tprs[fold_idx,threshold_idx], fprs[fold_idx,threshold_idx], _ = calculate_accuracy(threshold, dist[test_set], actual_issame[test_set])
+        # accuracy is (10,), the accuracy for each fold, calculated based on the best threshold of the fold.
+        # the threshold can be different for each fold?
         _, _, accuracy[fold_idx] = calculate_accuracy(thresholds[best_threshold_index], dist[test_set], actual_issame[test_set])
-          
+
+        # tpr is (400,), the true accept ratio for each threshold, averaged across folds.
         tpr = np.mean(tprs,0)
+        # fpr is (400,), the false accept ratio for each threshold, averaged across folds.
         fpr = np.mean(fprs,0)
+    # The overall accept ratio (both tpr and fpr) decreases with a small threshold.
     return tpr, fpr, accuracy
 
 def calculate_accuracy(threshold, dist, actual_issame):
     predict_issame = np.less(dist, threshold)
+    # number of {predict issame and is actually same},
+    # i.e, the number of correct prediction for legal access (true positive)
     tp = np.sum(np.logical_and(predict_issame, actual_issame))
+    # number of {predict issame and is actually different},
+    # i.e, the number of incorrect prediction for illegal access, (false positive, or false accept)
     fp = np.sum(np.logical_and(predict_issame, np.logical_not(actual_issame)))
+    # number of {predict isdifferent and is actually different},
+    # i.e., the number of correct prediction for illegal access, (true negative)
     tn = np.sum(np.logical_and(np.logical_not(predict_issame), np.logical_not(actual_issame)))
+    # number of {predict isdifferent and is actually same},
+    # i.e., the number of incorrect prediction for legal access, (false negative, or false reject)
     fn = np.sum(np.logical_and(np.logical_not(predict_issame), actual_issame))
-  
+
+    # true positive ratio = ratio of correctness for positive samples
+    # = true accept ratio = 1 - false reject ratio
     tpr = 0 if (tp+fn==0) else float(tp) / float(tp+fn)
+    # false positive ratio = ratio of incorrectness for negative samples
+    # i.e., false accept ratio
     fpr = 0 if (fp+tn==0) else float(fp) / float(fp+tn)
     acc = float(tp+tn)/dist.size
     return tpr, fpr, acc
 
 
-  
+# very similar to calculate_roc?
+# the difference seems to be that the threshold is decided by the best accuracy in calculate_roc
+# and is decided by the far target here.
 def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_target, nrof_folds=10, distance_metric=0, subtract_mean=False):
     assert(embeddings1.shape[0] == embeddings2.shape[0])
     assert(embeddings1.shape[1] == embeddings2.shape[1])
@@ -481,7 +507,12 @@ def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_targe
     far = np.zeros(nrof_folds)
     
     indices = np.arange(nrof_pairs)
-    
+
+    # Below is supposed to be the "View 2: 10-fold cross validation" procedure described in
+    # http://vis-www.cs.umass.edu/lfw/
+    # Each pair here is corresponding to one row in http://vis-www.cs.umass.edu/lfw/pairs.txt
+    # The cross validation is done by first assuming using the 9 folds to find the threshold
+    # which satisfies the far target, then use the threshold to calculate the
     for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
         if subtract_mean:
             mean = np.mean(np.concatenate([embeddings1[train_set], embeddings2[train_set]]), axis=0)
@@ -494,14 +525,19 @@ def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_targe
         for threshold_idx, threshold in enumerate(thresholds):
             _, far_train[threshold_idx] = calculate_val_far(threshold, dist[train_set], actual_issame[train_set])
         if np.max(far_train)>=far_target:
+            # ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.interp1d.html
+            # get a linear continuous linear function by interpolation.
             f = interpolate.interp1d(far_train, thresholds, kind='slinear')
             threshold = f(far_target)
         else:
             threshold = 0.0
-    
+
+        # val is the correct accept ratio.
         val[fold_idx], far[fold_idx] = calculate_val_far(threshold, dist[test_set], actual_issame[test_set])
   
     val_mean = np.mean(val)
+    # Since the threshold is derived from the training set (9 folds),
+    # the far target seems to be not guaranteed on the test set (1 fold).
     far_mean = np.mean(far)
     val_std = np.std(val)
     return val_mean, val_std, far_mean
