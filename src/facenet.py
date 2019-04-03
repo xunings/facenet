@@ -422,6 +422,15 @@ def distance(embeddings1, embeddings2, distance_metric=0):
         # debug: similarity is (6000,), i.e., the correlation for each pair.
         similarity = dot / norm
         dist = np.arccos(similarity) / math.pi
+    elif distance_metric==2:
+        # Averaging the features of the original and the flipped images.
+        embedding_size = int(embeddings1.shape[1]/2)
+        avg_embeddings1 = (embeddings1[:, :embedding_size] + embeddings1[:, embedding_size:]) / 2.0
+        avg_embeddings2 = (embeddings2[:, :embedding_size] + embeddings2[:, embedding_size:]) / 2.0
+        dot = np.sum(np.multiply(avg_embeddings1, avg_embeddings2), axis=1)
+        norm = np.linalg.norm(avg_embeddings1, axis=1) * np.linalg.norm(avg_embeddings2, axis=1)
+        similarity = dot / norm
+        dist = np.arccos(similarity) / math.pi
     else:
         raise 'Undefined distance metric %d' % distance_metric 
         
