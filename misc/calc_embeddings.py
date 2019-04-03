@@ -8,27 +8,32 @@ import numpy as np
 import tensorflow as tf
 import align.detect_face
 
-def main(args):
-    img_list = []
-    img_paths = facenet.get_image_paths(args.input_dir)
-    for img_path in img_paths:
-        img = scipy.misc.imread(os.path.expanduser(img_path), mode='RGB')
-        img_list.append(img)
-    img_np = np.stack(img_list)
-
+def np2embeddings(img_np, model):
     with tf.Graph().as_default():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
         sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
         with sess.as_default():
             pnet, rnet, onet = align.detect_face.create_mtcnn(sess, None)
 
-            facenet.load_model(args.model)
+            facenet.load_model(model)
             # Get input and output tensors
             images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
             embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
             phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
             feed_dict = { images_placeholder: img_np, phase_train_placeholder:False }
             emb = sess.run(embeddings, feed_dict=feed_dict)
+    return emb
+
+def main(args):
+    img_list = []
+    img_paths = facenet.get_image_paths(args.input_dir)
+    for img_path in img_paths:
+        img = scipy.misc.imread(os.path.expanduser(img_path), mode='RGB')
+        img = facenet.prewhiten(img)
+        img_list.append(img)
+    img_np = np.stack(img_list)
+
+    emb = np2embeddings(img_np, args.model)
 
     output_dir = args.output_dir
     if not os.path.exists(output_dir):
