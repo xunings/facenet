@@ -65,6 +65,8 @@ def main(args):
                                         dtypes=[tf.string, tf.int32, tf.int32],
                                         shapes=[(1,), (1,), (1,)],
                                         shared_name=None, name=None)
+            # There is no image path in the model's graph.
+            # Below connects the image path to the image_batch, which is the input of the graph.
             eval_enqueue_op = eval_input_queue.enqueue_many([image_paths_placeholder, labels_placeholder, control_placeholder], name='eval_enqueue_op')
             image_batch, label_batch = facenet.create_input_pipeline(eval_input_queue, image_size, nrof_preprocess_threads, batch_size_placeholder)
      

@@ -138,7 +138,9 @@ def create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batc
         shapes=[image_size + (3,), ()], enqueue_many=True,
         capacity=4 * nrof_preprocess_threads * 100,
         allow_smaller_final_batch=True)
-    
+
+    # debug: image_batch is Tensor("batch_join:0", shape=(?, 160, 160, 3), dtype=float32)
+    # label_batch is Tensor("batch_join:1", shape=(?,), dtype=int32)
     return image_batch, label_batch
 
 def get_control_flag(control, field):
