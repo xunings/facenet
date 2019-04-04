@@ -54,19 +54,6 @@ def main(args):
     print("Similarity: {}".format(best_similarity) )
 
 
-'''
-    database_embeddings_path = os.path.join(args.img_database_dir, 'embeddings.npy')
-    database_mapping_path = os.path.join(args.img_database_dir, 'img_path.txt')
-    embeddings_database = np.load(database_embeddings_path)
-    with open(database_mapping_path) as fin:
-        database_img_paths = json.load(fin)
-    scores = embeddings_database @ emb_test.reshape((-1,1))
-    idx = np.argmax(scores)
-    dist = distance(embeddings_database[idx,:], emb_test)
-    print("Best fit celebrity: {}".format(database_img_paths[idx]) )
-    print("Similarity: {}".format(dist) )
-'''
-
 def parse_arguments(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('model', type=str,

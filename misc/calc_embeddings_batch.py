@@ -56,26 +56,6 @@ def main(args):
             img_paths_this_batch = []
     print('Done.')
 
-'''
-    img_np = np.stack(imgs_this_batch)
-
-    emb = np2embeddings(img_np, args.model)
-
-    output_dir = args.output_dir
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    img_paths_output = os.path.join(output_dir, 'img_path.txt')
-    embeddings_output = os.path.join(output_dir, 'embeddings')
-
-    with open(img_paths_output, 'w') as fout:
-        fout.write(json.dumps(img_paths, indent=4))
-
-    np.save(embeddings_output, emb)
-'''
-
-
-
 
 def parse_arguments(argv):
     parser = argparse.ArgumentParser()
