@@ -26,20 +26,38 @@ def np2embeddings(img_np, model):
     return emb
 
 def main(args):
-    n_img_limit = 1000
-    img_list = []
+    output_dir = args.output_dir
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    batch_size = 1000
     img_paths = facenet.get_image_paths(args.input_dir)
-    i = 0
-    for img_path in img_paths:
-        i += 1
-        if i%1000 == 0:
-            print("Processing image {}".format(i))
-        if i > n_img_limit:
-            break
+    n_img = len(img_paths)
+    imgs_this_batch = []
+    img_paths_this_batch = []
+    for i, img_path in enumerate(img_paths):
         img = scipy.misc.imread(os.path.expanduser(img_path), mode='RGB')
         img = facenet.prewhiten(img)
-        img_list.append(img)
-    img_np = np.stack(img_list)
+        imgs_this_batch.append(img)
+        img_paths_this_batch.append(img_path)
+        if i%batch_size == batch_size -1 or i == n_img-1:
+            i_batch = int(i/batch_size)
+            i_batch_str = str(i_batch).zfill(3)
+            print("Processing batch {}".format(i_batch))
+            img_np = np.stack(imgs_this_batch)
+
+            emb = np2embeddings(img_np, args.model)
+            img_paths_output = os.path.join(output_dir, 'img_path{}.txt'.format(i_batch_str))
+            embeddings_output = os.path.join(output_dir, 'embeddings{}'.format(i_batch_str))
+            with open(img_paths_output, 'w') as fout:
+                fout.write(json.dumps(img_paths_this_batch, indent=4))
+            np.save(embeddings_output, emb)
+            imgs_this_batch = []
+            img_paths_this_batch = []
+    print('Done.')
+
+'''
+    img_np = np.stack(imgs_this_batch)
 
     emb = np2embeddings(img_np, args.model)
 
@@ -54,8 +72,9 @@ def main(args):
         fout.write(json.dumps(img_paths, indent=4))
 
     np.save(embeddings_output, emb)
+'''
 
-    print('Done.')
+
 
 
 def parse_arguments(argv):
