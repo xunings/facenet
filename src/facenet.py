@@ -320,7 +320,15 @@ class ImageClass():
   
     def __len__(self):
         return len(self.image_paths)
-  
+
+# get_dataset returns the ImageClasses for a parent dir with the following hierachical structure.
+# parent dir
+#   name1
+#     image1
+#     image2
+#   name2
+#     image1
+# In contrast, get_image_paths returns all the images in a folder.
 def get_dataset(path, has_class_directories=True):
     dataset = []
     path_exp = os.path.expanduser(path)

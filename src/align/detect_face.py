@@ -34,6 +34,8 @@ import tensorflow as tf
 import cv2
 import os
 
+# Below is like reinventing the Keras Sequential model...\
+# self.layers contains the output tensor of each layer
 def layer(op):
     """Decorator for composable network layers."""
 
@@ -84,11 +86,17 @@ class Network(object):
         """
         data_dict = np.load(data_path, encoding='latin1').item() #pylint: disable=no-member
 
+        # debug: the data_dict is a dict of dicts, containing
+        # {'conv5-2':{'weights': array}, conv5-1:{'weights': array}, ...}
         for op_name in data_dict:
             with tf.variable_scope(op_name, reuse=True):
                 for param_name, data in iteritems(data_dict[op_name]):
                     try:
                         var = tf.get_variable(param_name)
+                        # ref: https://www.tensorflow.org/api_docs/python/tf/Variable
+                        # ou can initialize a variable by running its initializer op, restoring the variable from a save file,
+                        # or simply running an assign Op that assigns a value to the variable.
+                        # In fact, the variable initializer op is just an assign Op that assigns the variable's initial value to the variable itself.
                         session.run(var.assign(data))
                     except ValueError:
                         if not ignore_missing:
@@ -103,6 +111,9 @@ class Network(object):
         for fed_layer in args:
             if isinstance(fed_layer, string_types):
                 try:
+                    # debug: fed_layer was 'data' before the assignment,
+                    # and is Tensor("rnet/input:0", shape=(?, 24, 24, 3), dtype=float32)
+                    # after the assignment.
                     fed_layer = self.layers[fed_layer]
                 except KeyError:
                     raise KeyError('Unknown layer name fed: %s' % fed_layer)
@@ -163,6 +174,7 @@ class Network(object):
                 output = tf.nn.relu(output, name=scope.name)
             return output
 
+    # prelu is leaky relu with learnable alpha.
     @layer
     def prelu(self, inp, name):
         with tf.variable_scope(name):
@@ -289,7 +301,10 @@ def create_mtcnn(sess, model_path):
         data = tf.placeholder(tf.float32, (None,48,48,3), 'input')
         onet = ONet({'data':data})
         onet.load(os.path.join(model_path, 'det3.npy'), sess)
-        
+
+    # Define lambda functions to get the outputs from the last layer of each network  (pnet, rnet and onet).
+    # Note sess.run is executed, so the functions are like regular python functions which give solid output,
+    # not tf graph construction.
     pnet_fun = lambda img : sess.run(('pnet/conv4-2/BiasAdd:0', 'pnet/prob1:0'), feed_dict={'pnet/input:0':img})
     rnet_fun = lambda img : sess.run(('rnet/conv5-2/conv5-2:0', 'rnet/prob1:0'), feed_dict={'rnet/input:0':img})
     onet_fun = lambda img : sess.run(('onet/conv6-2/conv6-2:0', 'onet/conv6-3/conv6-3:0', 'onet/prob1:0'), feed_dict={'onet/input:0':img})

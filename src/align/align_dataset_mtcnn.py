@@ -38,6 +38,7 @@ from time import sleep
 
 def main(args):
     sleep(random.random())
+    # expanduser changes ~ to /home/$USER
     output_dir = os.path.expanduser(args.output_dir)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -75,6 +76,9 @@ def main(args):
                     random.shuffle(cls.image_paths)
             for image_path in cls.image_paths:
                 nrof_images_total += 1
+                # debug: os.path.split splits the path and the file name with extension.
+                # os.path.splitext splits the filename and the extension.
+                # filename: Bob_Iger_0001
                 filename = os.path.splitext(os.path.split(image_path)[1])[0]
                 output_filename = os.path.join(output_class_dir, filename+'.png')
                 print(image_path)
@@ -92,7 +96,8 @@ def main(args):
                         if img.ndim == 2:
                             img = facenet.to_rgb(img)
                         img = img[:,:,0:3]
-    
+
+                        # debug: bouding_boxes is (1,5), the fifth element is confidence level?
                         bounding_boxes, _ = align.detect_face.detect_face(img, minsize, pnet, rnet, onet, threshold, factor)
                         nrof_faces = bounding_boxes.shape[0]
                         if nrof_faces>0:
@@ -116,6 +121,12 @@ def main(args):
                             for i, det in enumerate(det_arr):
                                 det = np.squeeze(det)
                                 bb = np.zeros(4, dtype=np.int32)
+                                # margin is added before resizing.
+                                # In https://github.com/davidsandberg/facenet/wiki/Validate-on-lfw
+                                # it is said "32 pixels with an image size of 160 pixels corresponds to a margin of 44 pixels with an image size of 182,
+                                # which is the image size that has been used for training of the model below."
+                                # But I dont understand why.
+                                # it is a bit weird that the margin is not dependent on the size of the bounding box.
                                 bb[0] = np.maximum(det[0]-args.margin/2, 0)
                                 bb[1] = np.maximum(det[1]-args.margin/2, 0)
                                 bb[2] = np.minimum(det[2]+args.margin/2, img_size[1])
