@@ -8,6 +8,7 @@ import compare
 import sys
 
 def np2embeddings(img_np, model):
+    print('Calculating embedding')
     with tf.Graph().as_default():
         tfconfig = tf.ConfigProto()
         tfconfig.gpu_options.allow_growth = True
