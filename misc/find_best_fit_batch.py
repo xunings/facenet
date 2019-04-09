@@ -1,7 +1,7 @@
 import argparse
 import sys
 import compare
-import calc_embeddings
+import align_and_embed_batch
 import numpy as np
 import os
 import json
@@ -25,14 +25,14 @@ def main(args):
         image.append(prewhitened)
     else:
         image = compare.load_and_align_data([args.img_path], 160, 32, 0.8)
-    emb_test = calc_embeddings.np2embeddings(image, args.model)
+    emb_test = align_and_embed_batch.np2embeddings(image, args.model)
     best_similarity = 0
     best_fit_img = ''
     n_batch_limit = 1000
     for i_batch in range(n_batch_limit):
         i_batch_str = str(i_batch).zfill(3)
-        database_embeddings_path = os.path.join(args.img_database_dir, 'embeddings{}.npy'.format(i_batch_str))
-        database_mapping_path = os.path.join(args.img_database_dir, 'img_path{}.txt'.format(i_batch_str))
+        database_embeddings_path = os.path.join(args.img_database_dir, 'embeddings_{}.npy'.format(i_batch_str))
+        database_mapping_path = os.path.join(args.img_database_dir, 'img_path_{}.txt'.format(i_batch_str))
         if not ( os.path.isfile(database_embeddings_path) \
                  and os.path.isfile(database_mapping_path) ):
             break
