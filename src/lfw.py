@@ -33,6 +33,10 @@ import facenet
 
 def evaluate(embeddings, actual_issame, nrof_folds=10, distance_metric=0, subtract_mean=False):
     # Calculate evaluation metrics
+    # The embedding of each image is normalized to ||emb||==1.
+    # After concatenating two horizontal flipped images, ||emb2||^2=2, ||emb2||=1.414
+    # So the range of squared L2 distance is [0,8]
+    # the range of arccos(vector_angle) is [0 pi] by the definition of np.arccos
     thresholds = np.arange(0, 4, 0.01)
     # debug: embeddings1 and embeddings2 are (6000, 1024)
     embeddings1 = embeddings[0::2]
