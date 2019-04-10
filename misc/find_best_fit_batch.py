@@ -32,23 +32,23 @@ def main(args):
     for i_batch in range(n_batch_limit):
         i_batch_str = str(i_batch).zfill(3)
         database_embeddings_path = os.path.join(args.img_database_dir, 'embeddings_{}.npy'.format(i_batch_str))
-        database_mapping_path = os.path.join(args.img_database_dir, 'img_path_{}.txt'.format(i_batch_str))
+        database_mapping_path = os.path.join(args.img_database_dir, 'img_names_{}.txt'.format(i_batch_str))
         if not ( os.path.isfile(database_embeddings_path) \
                  and os.path.isfile(database_mapping_path) ):
             break
         embeddings_database = np.load(database_embeddings_path)
         with open(database_mapping_path) as fin:
-            database_img_paths = json.load(fin)
+            database_img_path_names = json.load(fin)
         scores_wo_norm = embeddings_database @ emb_test.reshape((-1,1))
         best_idx_this_batch = np.argmax(scores_wo_norm)
         best_similarity_this_batch = calc_similarity(embeddings_database[best_idx_this_batch,:], emb_test)
         if per_batch_output:
             print("Processed batch {}".format(i_batch))
-            print("Best fit image of this batch: {}".format(database_img_paths[best_idx_this_batch]))
+            print("Best fit image of this batch: {}".format(database_img_path_names['names'][best_idx_this_batch]))
             print("Similarity: {}".format(best_similarity_this_batch))
         if best_similarity_this_batch > best_similarity:
             best_similarity = best_similarity_this_batch
-            best_fit_img = database_img_paths[best_idx_this_batch]
+            best_fit_img = database_img_path_names['names'][best_idx_this_batch]
 
     print("Best fit image: {}".format(best_fit_img) )
     print("Similarity: {}".format(best_similarity) )
