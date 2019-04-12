@@ -305,6 +305,7 @@ def create_mtcnn(sess, model_path):
     # Define lambda functions to get the outputs from the last layer of each network  (pnet, rnet and onet).
     # Note sess.run is executed, so the functions are like regular python functions which give solid output,
     # not tf graph construction.
+    # The BiasAdd op is created by tf.nn.bias_add (called from detect_face.conv)
     pnet_fun = lambda img : sess.run(('pnet/conv4-2/BiasAdd:0', 'pnet/prob1:0'), feed_dict={'pnet/input:0':img})
     rnet_fun = lambda img : sess.run(('rnet/conv5-2/conv5-2:0', 'rnet/prob1:0'), feed_dict={'rnet/input:0':img})
     onet_fun = lambda img : sess.run(('onet/conv6-2/conv6-2:0', 'onet/conv6-3/conv6-3:0', 'onet/prob1:0'), feed_dict={'onet/input:0':img})
@@ -328,6 +329,11 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
     minl=minl*m
     # create scale pyramid
     scales=[]
+    # 12 is the input size for pnet according to the mtcnn paper.
+    # minl*12/minsize>=12
+    # i.e., minl >= minsize
+    # multilple level scaling is applied to build the "image pyramid"
+    # as long as the above condition is satisfied.
     while minl>=12:
         scales += [m*np.power(factor, factor_count)]
         minl = minl*factor
@@ -338,11 +344,16 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
         hs=int(np.ceil(h*scale))
         ws=int(np.ceil(w*scale))
         im_data = imresample(img, (hs, ws))
+        # 0.0078125 = 1/128
         im_data = (im_data-127.5)*0.0078125
         img_x = np.expand_dims(im_data, 0)
         img_y = np.transpose(img_x, (0,2,1,3))
         out = pnet(img_y)
+        # debug: out0 is (1,61,49,4),
+        # each (1,1,1,4) corresponds to the bounding box for a (12,12,3) patch of the input image
         out0 = np.transpose(out[0], (0,2,1,3))
+        # debug: out0 is (1,61,49,2),
+        # each (1,1,1,2) corresponds to the prob of true/false face for a (12,12,3) patch.
         out1 = np.transpose(out[1], (0,2,1,3))
         
         boxes, _ = generateBoundingBox(out1[0,:,:,1].copy(), out0[0,:,:,:].copy(), scale, threshold[0])
@@ -355,6 +366,8 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
 
     numbox = total_boxes.shape[0]
     if numbox>0:
+        # Note: the boxes are merged before applying the regs modification.
+        # It seems like the boxes may become overlapped again after regs modification and rerecing to square box.
         pick = nms(total_boxes.copy(), 0.7, 'Union')
         total_boxes = total_boxes[pick,:]
         regw = total_boxes[:,2]-total_boxes[:,0]
@@ -366,6 +379,11 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
         total_boxes = np.transpose(np.vstack([qq1, qq2, qq3, qq4, total_boxes[:,4]]))
         total_boxes = rerec(total_boxes.copy())
         total_boxes[:,0:4] = np.fix(total_boxes[:,0:4]).astype(np.int32)
+        # the boxes are already nearly square after rerec and before padding.
+        # debug: (total_boxes[:,2]-total_boxes[:,0])-(total_boxes[:,3]-total_boxes[:,1])
+        # is a vector containing only -1, 0 and 1.
+        # I don't know why the pad below is necessary.
+        # tmpw-tmph is also a vector with -1, 0 and 1.
         dy, edy, dx, edx, y, ey, x, ex, tmpw, tmph = pad(total_boxes.copy(), w, h)
 
     numbox = total_boxes.shape[0]
@@ -382,15 +400,18 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
         tempimg = (tempimg-127.5)*0.0078125
         tempimg1 = np.transpose(tempimg, (3,1,0,2))
         out = rnet(tempimg1)
+        # out0 (regs) is (4,44), out1 (probs) is (2,44)
         out0 = np.transpose(out[0])
         out1 = np.transpose(out[1])
         score = out1[1,:]
         ipass = np.where(score>threshold[1])
         total_boxes = np.hstack([total_boxes[ipass[0],0:4].copy(), np.expand_dims(score[ipass].copy(),1)])
+        # mv is the regs of the high confidence patches.
         mv = out0[:,ipass[0]]
         if total_boxes.shape[0]>0:
             pick = nms(total_boxes, 0.7, 'Union')
             total_boxes = total_boxes[pick,:]
+            # bbreg modifies the bounding boxes (bb) according to regs.
             total_boxes = bbreg(total_boxes.copy(), np.transpose(mv[:,pick]))
             total_boxes = rerec(total_boxes.copy())
 
@@ -410,6 +431,10 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
         tempimg = (tempimg-127.5)*0.0078125
         tempimg1 = np.transpose(tempimg, (3,1,0,2))
         out = onet(tempimg1)
+        # debug: for 5 boxes,
+        # out0 is (4,5) for the bounding box regression
+        # out1 is (10,5) for the landmarks
+        # out2 is (2,5) for the probs.
         out0 = np.transpose(out[0])
         out1 = np.transpose(out[1])
         out2 = np.transpose(out[2])
@@ -422,6 +447,15 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
 
         w = total_boxes[:,2]-total_boxes[:,0]+1
         h = total_boxes[:,3]-total_boxes[:,1]+1
+        # debug: all points are 0~1.
+        # It seems that each landmark point is a ratio to width or height.
+        # The first 5 points are x/width for the 5 key points.
+        # Point 5~9 are y/height.
+        # To recover the x in the original image,
+        # x_recover = x*width_orig + x_left_patch,
+        # where x_left_patch is the x of the left corner of the patch in the original image.
+        # the tile below duplicates a (numbox,) array to 5 rows, like manual broadcasting.
+        # Actually the below can be simplified as w * points[0:5,:] + total_boxes[:,0] - 1
         points[0:5,:] = np.tile(w,(5, 1))*points[0:5,:] + np.tile(total_boxes[:,0],(5, 1))-1
         points[5:10,:] = np.tile(h,(5, 1))*points[5:10,:] + np.tile(total_boxes[:,1],(5, 1))-1
         if total_boxes.shape[0]>0:
@@ -430,6 +464,7 @@ def detect_face(img, minsize, pnet, rnet, onet, threshold, factor):
             total_boxes = total_boxes[pick,:]
             points = points[:,pick]
                 
+    # The points are not actually used
     return total_boxes, points
 
 
@@ -682,6 +717,9 @@ def generateBoundingBox(imap, reg, scale, t):
     dy1 = np.transpose(reg[:,:,1])
     dx2 = np.transpose(reg[:,:,2])
     dy2 = np.transpose(reg[:,:,3])
+    # Find all the point in imap that "is Face",
+    # and get the (y,x) coordinate in imap.
+    # Each point in the imap is the "isFace" prob for a 12x12x3 reception area.
     y, x = np.where(imap >= t)
     if y.shape[0]==1:
         dx1 = np.flipud(dx1)
@@ -693,8 +731,18 @@ def generateBoundingBox(imap, reg, scale, t):
     if reg.size==0:
         reg = np.empty((0,3))
     bb = np.transpose(np.vstack([y,x]))
+    # debug: q1 is (15,2), 2 columns for the top left coordinate in the original image.
+    # corresponding to the top left coordinate in the 12x12x3 patch.
+    # Each row corresponds to one "isFace" point in imap.
+    # q2 is also (15,2) for the bottom right coordinate in the original image.
     q1 = np.fix((stride*bb+1)/scale)
     q2 = np.fix((stride*bb+cellsize-1+1)/scale)
+    # debug: boundingbox is (15,9) for 15 "isFace" points in imap.
+    # 1th and 2nd col for q1, 3rd and 4th col for q2,
+    # 5th col for the "isFace" score,
+    # 6th~9th cols are the input regs (bias) for left x, top y, right x and bottom y.
+    # It seems that the regs are defined as a ratio to w or h,
+    # The bounding box will be modified later according to the regs.
     boundingbox = np.hstack([q1, q2, np.expand_dims(score,1), reg])
     return boundingbox, reg
  
@@ -708,27 +756,40 @@ def nms(boxes, threshold, method):
     y2 = boxes[:,3]
     s = boxes[:,4]
     area = (x2-x1+1) * (y2-y1+1)
+    # sort s (confidence of isFace) according to ascending order,
+    # and get the sorted index as I.
     I = np.argsort(s)
     pick = np.zeros_like(s, dtype=np.int16)
     counter = 0
     while I.size>0:
+        # Process the most confident patch first.
         i = I[-1]
         pick[counter] = i
         counter += 1
         idx = I[0:-1]
+        # i is the current patch, idx is the set of all other patches.
+        # maximum is applied on each pair of {current patch, one of other patches}
+        # debug: xx1 is a vector, one element for the maximum of one pair.
         xx1 = np.maximum(x1[i], x1[idx])
         yy1 = np.maximum(y1[i], y1[idx])
         xx2 = np.minimum(x2[i], x2[idx])
         yy2 = np.minimum(y2[i], y2[idx])
         w = np.maximum(0.0, xx2-xx1+1)
         h = np.maximum(0.0, yy2-yy1+1)
+        # debug: inter is a vector, one element for the overlapping area of one pair of patches
         inter = w * h
+        # If a small area is completely included a big area,
+        # 'Min' gives o=1, but 'Union' gives o<1
         if method is 'Min':
             o = inter / np.minimum(area[i], area[idx])
         else:
+            # o is a vector, each element is the overlapping ratio for a pair of patches.
+            # Guess it is the Intersection-over-Union (IoU) ratio in the mtcnn paper.
             o = inter / (area[i] + area[idx] - inter)
+        # remove patches which are heavily overlapped with the current patch.
         I = I[np.where(o<=threshold)]
     pick = pick[0:counter]
+    # Return patches which are not heavily overlapped with each other.
     return pick
 
 # function [dy edy dx edx y ey x ex tmpw tmph] = pad(total_boxes,w,h)
@@ -769,6 +830,8 @@ def pad(total_boxes, w, h):
 # function [bboxA] = rerec(bboxA)
 def rerec(bboxA):
     """Convert bboxA to square."""
+    # seems that the center and w+h are kept unchanged,
+    # while w and h are averaged.
     h = bboxA[:,3]-bboxA[:,1]
     w = bboxA[:,2]-bboxA[:,0]
     l = np.maximum(w, h)
@@ -777,6 +840,9 @@ def rerec(bboxA):
     bboxA[:,2:4] = bboxA[:,0:2] + np.transpose(np.tile(l,(2,1)))
     return bboxA
 
+# The convention of tf is (height, width),
+# but cv2.resize desires (width, height).
+# So this function is defined.
 def imresample(img, sz):
     im_data = cv2.resize(img, (sz[1], sz[0]), interpolation=cv2.INTER_AREA) #@UndefinedVariable
     return im_data

@@ -103,6 +103,7 @@ def load_and_align_data(image_paths, image_size, margin, gpu_memory_fraction):
           continue
         det = np.squeeze(bounding_boxes[0,0:4])
         bb = np.zeros(4, dtype=np.int32)
+        # TODO: try margin as a ratio of height/width, instead of a fixed num of pixels.
         bb[0] = np.maximum(det[0]-margin/2, 0)
         bb[1] = np.maximum(det[1]-margin/2, 0)
         bb[2] = np.minimum(det[2]+margin/2, img_size[1])
