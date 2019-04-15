@@ -28,3 +28,13 @@ if __name__ == "__main__":
 
     print("IO nodes:")
     print(nodes_io)
+
+    # Another way: first import the model to the current graph,
+    # Then inspect the ops and tensors from the current graph
+    tf.import_graph_def(gf, name="")
+    g = tf.get_default_graph()
+    ops=g.get_operations()
+    ops=[op.name for op in ops]
+    ops=json.dumps(ops, indent=4)
+    print("Ops:")
+    print(ops)
