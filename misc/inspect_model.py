@@ -31,6 +31,7 @@ if __name__ == "__main__":
 
     # Another way: first import the model to the current graph,
     # Then inspect the ops and tensors from the current graph
+    # Ref: https://www.tensorflow.org/guide/graphs
     tf.import_graph_def(gf, name="")
     g = tf.get_default_graph()
     ops=g.get_operations()
