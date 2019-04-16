@@ -624,5 +624,6 @@ def put_images_on_grid(images, shape=(16,8)):
 
 def write_arguments_to_file(args, filename):
     with open(filename, 'w') as f:
+        # vars(args) turns the namespace args to a dict.
         for key, value in iteritems(vars(args)):
             f.write('%s: %s\n' % (key, str(value)))
