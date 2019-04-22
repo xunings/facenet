@@ -188,6 +188,7 @@ def main(args):
 
         # Start running operations on the Graph.
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
+        gpu_options.allow_growth = True
         sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
