@@ -137,12 +137,13 @@ def main(args):
         print('Building training graph')
         num_gpus = 4
         batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
-        logits_list = []
+        # logits_list = []
         cross_entropy_mean = 0
+        accuracy = 0
         with tf.variable_scope(tf.get_variable_scope()):
             for i in range(num_gpus):
-                # with tf.device('/gpu:%d' % i):
-                with tf.device('/gpu:%d' % 0):
+                with tf.device('/gpu:%d' % i):
+                # with tf.device('/cpu:%d' % 0):
                     with tf.name_scope('%s_%d' % ('tower', i)) as scope:
                         begin = batch_size_per_gpu*i
                         end = batch_size_per_gpu*i+batch_size_per_gpu
@@ -180,7 +181,11 @@ def main(args):
                         cross_entropy_mean += tf.reduce_mean(cross_entropy, name='cross_entropy') / num_gpus
                         tf.add_to_collection('losses', cross_entropy_mean)
 
-                        logits_list.append(logits_per_gpu)
+                        correct_prediction = tf.cast(tf.equal(tf.argmax(logits_per_gpu, 1), tf.cast(label_batch_per_gpu, tf.int64)),
+                                                     tf.float32)
+                        accuracy += tf.reduce_mean(correct_prediction) / num_gpus
+
+                        # logits_list.append(logits_per_gpu)
 
                         # Reuse variables for the next tower.
                         tf.get_variable_scope().reuse_variables()
@@ -191,10 +196,10 @@ def main(args):
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
             args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
         tf.summary.scalar('learning_rate', learning_rate)
-        logits = tf.concat(logits_list, axis=0)
-        correct_prediction = tf.cast(tf.equal(tf.argmax(logits, 1), tf.cast(label_batch, tf.int64)),
-                                                     tf.float32)
-        accuracy = tf.reduce_mean(correct_prediction)
+        # logits = tf.concat(logits_list, axis=0)
+        # correct_prediction = tf.cast(tf.equal(tf.argmax(logits, 1), tf.cast(label_batch, tf.int64)),
+        #                                             tf.float32)
+        # accuracy = tf.reduce_mean(correct_prediction)
 
         '''
         image_batch = tf.identity(image_batch, 'image_batch')
@@ -260,7 +265,7 @@ def main(args):
         # Start running operations on the Graph.
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
         gpu_options.allow_growth = True
-        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
+        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False, allow_soft_placement=True))
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
