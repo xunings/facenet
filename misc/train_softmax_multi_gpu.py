@@ -138,8 +138,12 @@ def main(args):
         num_gpus = 4
         batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
         # logits_list = []
+        prelogits_list = []
         cross_entropy_mean = 0
         accuracy = 0
+        prelogits_norm = 0
+        prelogits_center_loss = 0
+        emb_list = []
         with tf.variable_scope(tf.get_variable_scope()):
             for i in range(num_gpus):
                 with tf.device('/gpu:%d' % i):
@@ -152,28 +156,28 @@ def main(args):
                         label_batch_per_gpu = tf.identity(label_batch[begin:end], 'label_batch')
 
                         # Build the inference graph
-                        prelogits, _ = network.inference(image_batch_per_gpu, args.keep_probability,
+                        prelogits_per_gpu, _ = network.inference(image_batch_per_gpu, args.keep_probability,
                                                          phase_train=phase_train_placeholder,
                                                          bottleneck_layer_size=args.embedding_size,
                                                          weight_decay=args.weight_decay)
-                        logits_per_gpu = slim.fully_connected(prelogits, len(train_set), activation_fn=None,
+                        prelogits_list.append(prelogits_per_gpu)
+                        logits_per_gpu = slim.fully_connected(prelogits_per_gpu, len(train_set), activation_fn=None,
                                                       weights_initializer=slim.initializers.xavier_initializer(),
                                                       weights_regularizer=slim.l2_regularizer(args.weight_decay),
                                                       scope='Logits', reuse=False)
-                        embeddings = tf.nn.l2_normalize(prelogits, 1, 1e-10, name='embeddings')
+                        embeddings_per_gpu = tf.nn.l2_normalize(prelogits_per_gpu, 1, 1e-10, name='embeddings')
+                        emb_list.append(embeddings_per_gpu)
 
                         # Norm for the prelogits
                         eps = 1e-4
-                        prelogits_norm = tf.reduce_mean(
-                            tf.norm(tf.abs(prelogits) + eps, ord=args.prelogits_norm_p, axis=1))
-                        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
-                                             prelogits_norm * args.prelogits_norm_loss_factor)
+                        prelogits_norm += tf.reduce_mean(
+                            tf.norm(tf.abs(prelogits_per_gpu) + eps, ord=args.prelogits_norm_p, axis=1)) / num_gpus
+
 
                         # Add center loss
-                        prelogits_center_loss, _ = facenet.center_loss(prelogits, label_batch_per_gpu, args.center_loss_alfa,
+                        prelogits_center_loss_per_gpu, _ = facenet.center_loss(prelogits_per_gpu, label_batch_per_gpu, args.center_loss_alfa,
                                                                        nrof_classes)
-                        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
-                                             prelogits_center_loss * args.center_loss_factor)
+                        prelogits_center_loss += prelogits_center_loss_per_gpu / num_gpus
 
                         # Calculate the average cross entropy loss across the batch
                         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -193,61 +197,24 @@ def main(args):
                         # Retain the summaries from the final tower.
                         summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
+        prelogits = tf.concat(prelogits_list, axis=0)
+
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
             args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
         tf.summary.scalar('learning_rate', learning_rate)
+
+        embeddings = tf.concat(emb_list, axis=0)
+
+        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
+                             prelogits_norm * args.prelogits_norm_loss_factor)
+        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
+                             prelogits_center_loss * args.center_loss_factor)
         # logits = tf.concat(logits_list, axis=0)
         # correct_prediction = tf.cast(tf.equal(tf.argmax(logits, 1), tf.cast(label_batch, tf.int64)),
         #                                             tf.float32)
         # accuracy = tf.reduce_mean(correct_prediction)
 
-        '''
-        image_batch = tf.identity(image_batch, 'image_batch')
-        image_batch = tf.identity(image_batch, 'input')
-        label_batch = tf.identity(label_batch, 'label_batch')
-        
-        print('Number of classes in training set: %d' % nrof_classes)
-        print('Number of examples in training set: %d' % len(image_list))
 
-        print('Number of classes in validation set: %d' % len(val_set))
-        print('Number of examples in validation set: %d' % len(val_image_list))
-        
-        print('Building training graph')
-        
-        # Build the inference graph
-        prelogits, _ = network.inference(image_batch, args.keep_probability, 
-            phase_train=phase_train_placeholder, bottleneck_layer_size=args.embedding_size, 
-            weight_decay=args.weight_decay)
-        logits = slim.fully_connected(prelogits, len(train_set), activation_fn=None, 
-                weights_initializer=slim.initializers.xavier_initializer(), 
-                weights_regularizer=slim.l2_regularizer(args.weight_decay),
-                scope='Logits', reuse=False)
-
-        embeddings = tf.nn.l2_normalize(prelogits, 1, 1e-10, name='embeddings')
-
-        # Norm for the prelogits
-        eps = 1e-4
-        prelogits_norm = tf.reduce_mean(tf.norm(tf.abs(prelogits)+eps, ord=args.prelogits_norm_p, axis=1))
-        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, prelogits_norm * args.prelogits_norm_loss_factor)
-
-        # Add center loss
-        prelogits_center_loss, _ = facenet.center_loss(prelogits, label_batch, args.center_loss_alfa, nrof_classes)
-        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, prelogits_center_loss * args.center_loss_factor)
-
-        learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
-            args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
-        tf.summary.scalar('learning_rate', learning_rate)
-
-        # Calculate the average cross entropy loss across the batch
-        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            labels=label_batch, logits=logits, name='cross_entropy_per_example')
-        cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
-        tf.add_to_collection('losses', cross_entropy_mean)
-        
-        correct_prediction = tf.cast(tf.equal(tf.argmax(logits, 1), tf.cast(label_batch, tf.int64)), tf.float32)
-        accuracy = tf.reduce_mean(correct_prediction)
-        '''
-        
         # Calculate the total losses
         regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
