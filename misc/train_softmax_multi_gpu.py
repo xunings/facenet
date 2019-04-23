@@ -135,7 +135,7 @@ def main(args):
         print('Number of examples in validation set: %d' % len(val_image_list))
 
         print('Building training graph')
-        num_gpus = 4
+        num_gpus = args.num_gpus
         batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
         # logits_list = []
         prelogits_list = []
@@ -619,6 +619,10 @@ def parse_arguments(argv):
         help='Concatenates embeddings for the image and its horizontally flipped counterpart.', action='store_true')
     parser.add_argument('--lfw_subtract_mean', 
         help='Subtract feature mean before calculating distance.', action='store_true')
+
+    parser.add_argument('--num_gpus', type=int,
+        help='Number of GPUs to use', default=1)
+
     return parser.parse_args(argv)
   
 
