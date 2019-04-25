@@ -128,6 +128,10 @@ def main(args):
 
         image_batch, label_batch = facenet.create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batch_size_placeholder)
 
+        image_batch = tf.identity(image_batch, 'image_batch')
+        image_batch = tf.identity(image_batch, 'input')
+        label_batch = tf.identity(label_batch, 'label_batch')
+
         print('Number of classes in training set: %d' % nrof_classes)
         print('Number of examples in training set: %d' % len(image_list))
 
@@ -144,7 +148,25 @@ def main(args):
         cross_entropy_mean_list = []
         accuracy_list = []
         embeddings_list = []
+        tower_grads = []
 
+        # Compute gradients.
+        learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
+            args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
+        tf.summary.scalar('learning_rate', learning_rate)
+        optimizer = args.optimizer
+        if optimizer == 'ADAGRAD':
+            opt = tf.train.AdagradOptimizer(learning_rate)
+        elif optimizer == 'ADADELTA':
+            opt = tf.train.AdadeltaOptimizer(learning_rate, rho=0.9, epsilon=1e-6)
+        elif optimizer == 'ADAM':
+            opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999, epsilon=0.1)
+        elif optimizer == 'RMSPROP':
+            opt = tf.train.RMSPropOptimizer(learning_rate, decay=0.9, momentum=0.9, epsilon=1.0)
+        elif optimizer == 'MOM':
+            opt = tf.train.MomentumOptimizer(learning_rate, 0.9, use_nesterov=True)
+        else:
+            raise ValueError('Invalid optimization algorithm')
 
         # cross_entropy_mean = 0
         # accuracy = 0
@@ -157,9 +179,9 @@ def main(args):
                     with tf.name_scope('%s_%d' % ('tower', i)) as scope:
                         begin = batch_size_per_gpu*i
                         end = batch_size_per_gpu*i+batch_size_per_gpu
-                        image_batch_per_gpu = tf.identity(image_batch[begin:end], 'image_batch')
-                        image_batch_per_gpu = tf.identity(image_batch_per_gpu, 'input')
-                        label_batch_per_gpu = tf.identity(label_batch[begin:end], 'label_batch')
+                        image_batch_per_gpu = image_batch[begin:end]
+                        image_batch_per_gpu = image_batch_per_gpu
+                        label_batch_per_gpu = label_batch[begin:end]
 
                         # Build the inference graph
                         prelogits_per_gpu, _ = network.inference(image_batch_per_gpu, args.keep_probability,
@@ -187,53 +209,63 @@ def main(args):
                         prelogits_center_loss_list.append(prelogits_center_loss_per_gpu)
 
                         # Calculate the average cross entropy loss across the batch
-                        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                        cross_entropy_per_gpu = tf.nn.sparse_softmax_cross_entropy_with_logits(
                             labels=label_batch_per_gpu, logits=logits_per_gpu, name='cross_entropy_per_example')
-                        cross_entropy_mean_per_gpu = tf.reduce_mean(cross_entropy, name='cross_entropy')
+                        cross_entropy_mean_per_gpu = tf.reduce_mean(cross_entropy_per_gpu)
                         cross_entropy_mean_list.append(cross_entropy_mean_per_gpu)
 
-                        correct_prediction = tf.cast(tf.equal(tf.argmax(logits_per_gpu, 1), tf.cast(label_batch_per_gpu, tf.int64)),
+                        correct_prediction_per_gpu = tf.cast(tf.equal(tf.argmax(logits_per_gpu, 1), tf.cast(label_batch_per_gpu, tf.int64)),
                                                      tf.float32)
-                        accuracy_per_gpu = tf.reduce_mean(correct_prediction)
+                        accuracy_per_gpu = tf.reduce_mean(correct_prediction_per_gpu)
                         accuracy_list.append(accuracy_per_gpu)
+
+                        # duplicate calculation for regularization_losses, to be improved.
+                        regularization_losses_tmp = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+                        loss_per_gpu = tf.add_n(regularization_losses_tmp +
+                                                [prelogits_norm_per_gpu * args.prelogits_norm_loss_factor] +
+                                                [prelogits_center_loss_per_gpu * args.center_loss_factor] +
+                                                [cross_entropy_mean_per_gpu])
+
+                        tf.get_variable_scope().reuse_variables()
+
+                        grads_per_gpu = opt.compute_gradients(loss_per_gpu, tf.global_variables())
+                        tower_grads.append(grads_per_gpu)
 
                         # logits_list.append(logits_per_gpu)
 
                         # Reuse variables for the next tower.
-                        tf.get_variable_scope().reuse_variables()
 
                         # Retain the summaries from the final tower.
                         # summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
+        grads = average_gradients(tower_grads)
+
         prelogits = tf.concat(prelogits_list, axis=0)
 
         prelogits_norm = tf.add_n(prelogits_norm_list) / num_gpus
-        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
-                             prelogits_norm * args.prelogits_norm_loss_factor)
+        # tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
+        #                     prelogits_norm * args.prelogits_norm_loss_factor)
 
         prelogits_center_loss = tf.add_n(prelogits_norm_list) / num_gpus
-        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
-                             prelogits_center_loss * args.center_loss_factor)
+        # tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
+        #                     prelogits_center_loss * args.center_loss_factor)
 
         cross_entropy_mean = tf.add_n(cross_entropy_mean_list) / num_gpus
+        cross_entropy_mean = tf.identity(cross_entropy_mean, 'cross_entropy')
         tf.add_to_collection('losses', cross_entropy_mean)
 
         accuracy = tf.add_n(accuracy_list) / num_gpus
 
-
-        learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
-            args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
-        tf.summary.scalar('learning_rate', learning_rate)
-
         embeddings = tf.concat(embeddings_list, axis=0)
 
         # Calculate the total losses
-        regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+        regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) + \
+                                [prelogits_norm * args.prelogits_norm_loss_factor] + \
+                                [prelogits_center_loss * args.center_loss_factor]
         total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
 
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
-        train_op = facenet.train(total_loss, global_step, args.optimizer, 
-            learning_rate, args.moving_average_decay, tf.global_variables(), args.log_histograms)
+        train_op = train_facenet(opt, grads, total_loss, global_step, args.moving_average_decay, args.log_histograms)
         
         # Create a saver
         saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=3)
@@ -533,6 +565,80 @@ def save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_n
     summary.value.add(tag='time/save_variables', simple_value=save_time_variables)
     summary.value.add(tag='time/save_metagraph', simple_value=save_time_metagraph)
     summary_writer.add_summary(summary, step)
+
+# Copied from https://github.com/tensorflow/models/blob/master/tutorials/image/cifar10/cifar10_multi_gpu_train.py
+# And add support for grad == None, which happens for moving_mean and moving_variance ops.
+def average_gradients(tower_grads):
+    """Calculate the average gradient for each shared variable across all towers.
+    Note that this function provides a synchronization point across all towers.
+    Args:
+      tower_grads: List of lists of (gradient, variable) tuples. The outer list
+        is over individual gradients. The inner list is over the gradient
+        calculation for each tower.
+    Returns:
+       List of pairs of (gradient, variable) where the gradient has been averaged
+       across all towers.
+    """
+    average_grads = []
+    for grad_and_vars in zip(*tower_grads):
+        # Note that each grad_and_vars looks like the following:
+        #   ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
+        grads = []
+        grad_is_none = False
+        for g, _ in grad_and_vars:
+            if g is None:
+                grad_is_none = True
+                grad = g
+                break
+
+            # Add 0 dimension to the gradients to represent the tower.
+            expanded_g = tf.expand_dims(g, 0)
+
+            # Append on a 'tower' dimension which we will average over below.
+            grads.append(expanded_g)
+
+        if not grad_is_none:
+            # Average over the 'tower' dimension.
+            grad = tf.concat(axis=0, values=grads)
+            grad = tf.reduce_mean(grad, 0)
+
+        # Keep in mind that the Variables are redundant because they are shared
+        # across towers. So .. we will just return the first tower's pointer to
+        # the Variable.
+        v = grad_and_vars[0][1]
+        grad_and_var = (grad, v)
+        average_grads.append(grad_and_var)
+    return average_grads
+
+# This is to replace facenet.train,
+# modified for multi-gpu training
+def train_facenet(opt, grads, total_loss, global_step, moving_average_decay, log_histograms=True):
+    # Generate moving averages of all losses and associated summaries.
+    loss_averages_op = facenet._add_loss_summaries(total_loss)
+
+    # Apply gradients.
+    apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
+
+    # Add histograms for trainable variables.
+    if log_histograms:
+        for var in tf.trainable_variables():
+            tf.summary.histogram(var.op.name, var)
+
+    # Add histograms for gradients.
+    if log_histograms:
+        for grad, var in grads:
+            if grad is not None:
+                tf.summary.histogram(var.op.name + '/gradients', grad)
+
+    # Track the moving averages of all trainable variables.
+    variable_averages = tf.train.ExponentialMovingAverage(
+        moving_average_decay, global_step)
+    variables_averages_op = variable_averages.apply(tf.trainable_variables())
+
+    with tf.control_dependencies([loss_averages_op, apply_gradient_op, variables_averages_op]):
+        train_op = tf.no_op(name='train')
+
+    return train_op
   
 
 def parse_arguments(argv):
