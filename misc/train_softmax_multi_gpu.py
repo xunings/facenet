@@ -220,9 +220,8 @@ def main(args):
                         accuracy_list.append(accuracy_per_gpu)
 
                         # duplicate calculation for regularization_losses, to be improved.
-                        regularization_losses_tmp = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-                        loss_per_gpu = tf.add_n(regularization_losses_tmp +
-                                                [prelogits_norm_per_gpu * args.prelogits_norm_loss_factor] +
+                        # regularization_losses_tmp = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+                        loss_per_gpu = tf.add_n([prelogits_norm_per_gpu * args.prelogits_norm_loss_factor] +
                                                 [prelogits_center_loss_per_gpu * args.center_loss_factor] +
                                                 [cross_entropy_mean_per_gpu])
 
@@ -237,6 +236,10 @@ def main(args):
 
                         # Retain the summaries from the final tower.
                         # summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+
+        regularization_losses_weights = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+        grads_reg_weights = opt.compute_gradients(regularization_losses_weights, tf.global_variables())
+        tower_grads.append(grads_reg_weights)
 
         grads = average_gradients(tower_grads)
 
