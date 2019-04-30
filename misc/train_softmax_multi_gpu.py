@@ -93,8 +93,12 @@ def main(args):
         pairs = lfw.read_pairs(os.path.expanduser(args.lfw_pairs))
         # Get the paths for the corresponding images
         lfw_paths, actual_issame = lfw.get_paths(os.path.expanduser(args.lfw_dir), pairs)
-    
-    with tf.Graph().as_default():
+
+    # with tf.Graph().as_default():
+    # Pin the variables on cpu0 while maintaining the computation on gpu
+    # Ref: https://github.com/tensorflow/tensorflow/issues/9517
+    # Ref: https://www.tensorflow.org/tutorials/images/deep_cnn
+    with tf.Graph().as_default(), tf.device('/cpu:0'):
         tf.set_random_seed(args.seed)
         global_step = tf.Variable(0, trainable=False)
         
@@ -168,15 +172,11 @@ def main(args):
         else:
             raise ValueError('Invalid optimization algorithm')
 
-        # cross_entropy_mean = 0
-        # accuracy = 0
-        # prelogits_norm = 0
-        # prelogits_center_loss = 0
         with tf.variable_scope(tf.get_variable_scope()):
             for i in range(num_gpus):
-                with tf.device('/gpu:%d' % i):
+                with tf.device('/gpu:%d' % i), tf.name_scope('%s_%d' % ('tower', i)):
                 # with tf.device('/cpu:%d' % 0):
-                    with tf.name_scope('%s_%d' % ('tower', i)) as scope:
+                    with slim.arg_scope([slim.model_variable, slim.variable], device='/cpu:0'):
                         begin = batch_size_per_gpu*i
                         end = batch_size_per_gpu*i+batch_size_per_gpu
                         image_batch_per_gpu = image_batch[begin:end]
