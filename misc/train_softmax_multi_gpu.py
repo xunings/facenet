@@ -144,7 +144,6 @@ def main(args):
         print('Number of examples in validation set: %d' % len(val_image_list))
 
         print('Building training graph')
-        num_gpus = args.num_gpus
 
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
             args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
@@ -158,7 +157,7 @@ def main(args):
 
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
         train_op = train_facenet(opt, grads, total_loss, global_step, args.moving_average_decay, args.log_histograms)
-        
+
         # Create a saver
         saver = tf.train.Saver(tf.trainable_variables(), max_to_keep=3)
 
