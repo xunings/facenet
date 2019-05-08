@@ -648,6 +648,7 @@ def compute_loss_grads_multigpu(args, batch_size_placeholder, phase_train_placeh
     accuracy = tf.add_n(accuracy_list) / num_gpus
 
     embeddings = tf.concat(embeddings_list, axis=0)
+    embeddings = tf.identity(embeddings, 'embeddings')
 
     # Calculate the total losses
     regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) + \
