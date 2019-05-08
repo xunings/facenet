@@ -123,7 +123,8 @@ def main(args):
         labels_placeholder = tf.placeholder(tf.int32, shape=(None,1), name='labels')
         control_placeholder = tf.placeholder(tf.int32, shape=(None,1), name='control')
         
-        nrof_preprocess_threads = 4
+        # nrof_preprocess_threads = 4
+        nrof_preprocess_threads = args.nrof_preprocess_threads
         input_queue = data_flow_ops.FIFOQueue(capacity=2000000,
                                     dtypes=[tf.string, tf.int32, tf.int32],
                                     shapes=[(1,), (1,), (1,)],
@@ -744,6 +745,8 @@ def parse_arguments(argv):
 
     parser.add_argument('--num_gpus', type=int,
         help='Number of GPUs to use', default=1)
+    parser.add_argument('--nrof_preprocess_threads', type=int,
+                        help='Number of preprocessing threads', default=4)
 
     return parser.parse_args(argv)
   
