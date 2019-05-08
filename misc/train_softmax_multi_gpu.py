@@ -145,129 +145,16 @@ def main(args):
 
         print('Building training graph')
         num_gpus = args.num_gpus
-        batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
-        # logits_list = []
-        prelogits_list = []
-        prelogits_norm_list = []
-        prelogits_center_loss_list = []
-        cross_entropy_mean_list = []
-        accuracy_list = []
-        embeddings_list = []
-        tower_grads = []
 
-        # Compute gradients.
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
             args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
         tf.summary.scalar('learning_rate', learning_rate)
-        optimizer = args.optimizer
-        if optimizer == 'ADAGRAD':
-            opt = tf.train.AdagradOptimizer(learning_rate)
-        elif optimizer == 'ADADELTA':
-            opt = tf.train.AdadeltaOptimizer(learning_rate, rho=0.9, epsilon=1e-6)
-        elif optimizer == 'ADAM':
-            opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999, epsilon=0.1)
-        elif optimizer == 'RMSPROP':
-            opt = tf.train.RMSPropOptimizer(learning_rate, decay=0.9, momentum=0.9, epsilon=1.0)
-        elif optimizer == 'MOM':
-            opt = tf.train.MomentumOptimizer(learning_rate, 0.9, use_nesterov=True)
-        else:
-            raise ValueError('Invalid optimization algorithm')
+        opt = get_opt(args.optimizer, learning_rate)
 
-        with tf.variable_scope(tf.get_variable_scope()):
-            for i in range(num_gpus):
-                with tf.device('/gpu:%d' % i), tf.name_scope('%s_%d' % ('tower', i)):
-                # with tf.device('/cpu:%d' % 0):
-                    with slim.arg_scope([slim.model_variable, slim.variable], device='/cpu:0'):
-                        begin = batch_size_per_gpu*i
-                        end = batch_size_per_gpu*i+batch_size_per_gpu
-                        image_batch_per_gpu = image_batch[begin:end]
-                        image_batch_per_gpu = image_batch_per_gpu
-                        label_batch_per_gpu = label_batch[begin:end]
-
-                        # Build the inference graph
-                        prelogits_per_gpu, _ = network.inference(image_batch_per_gpu, args.keep_probability,
-                                                         phase_train=phase_train_placeholder,
-                                                         bottleneck_layer_size=args.embedding_size,
-                                                         weight_decay=args.weight_decay)
-                        prelogits_list.append(prelogits_per_gpu)
-                        logits_per_gpu = slim.fully_connected(prelogits_per_gpu, len(train_set), activation_fn=None,
-                                                      weights_initializer=slim.initializers.xavier_initializer(),
-                                                      weights_regularizer=slim.l2_regularizer(args.weight_decay),
-                                                      scope='Logits', reuse=False)
-                        embeddings_per_gpu = tf.nn.l2_normalize(prelogits_per_gpu, 1, 1e-10, name='embeddings')
-                        embeddings_list.append(embeddings_per_gpu)
-
-                        # Norm for the prelogits
-                        eps = 1e-4
-                        prelogits_norm_per_gpu = tf.reduce_mean(
-                            tf.norm(tf.abs(prelogits_per_gpu) + eps, ord=args.prelogits_norm_p, axis=1))
-                        prelogits_norm_list.append(prelogits_norm_per_gpu)
-
-
-                        # Add center loss
-                        prelogits_center_loss_per_gpu, _ = facenet.center_loss(prelogits_per_gpu, label_batch_per_gpu, args.center_loss_alfa,
-                                                                       nrof_classes)
-                        prelogits_center_loss_list.append(prelogits_center_loss_per_gpu)
-
-                        # Calculate the average cross entropy loss across the batch
-                        cross_entropy_per_gpu = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                            labels=label_batch_per_gpu, logits=logits_per_gpu, name='cross_entropy_per_example')
-                        cross_entropy_mean_per_gpu = tf.reduce_mean(cross_entropy_per_gpu)
-                        cross_entropy_mean_list.append(cross_entropy_mean_per_gpu)
-
-                        correct_prediction_per_gpu = tf.cast(tf.equal(tf.argmax(logits_per_gpu, 1), tf.cast(label_batch_per_gpu, tf.int64)),
-                                                     tf.float32)
-                        accuracy_per_gpu = tf.reduce_mean(correct_prediction_per_gpu)
-                        accuracy_list.append(accuracy_per_gpu)
-
-                        # duplicate calculation for regularization_losses, to be improved.
-                        # regularization_losses_tmp = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-                        loss_per_gpu = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) +
-                                                [prelogits_norm_per_gpu * args.prelogits_norm_loss_factor] +
-                                                [prelogits_center_loss_per_gpu * args.center_loss_factor] +
-                                                [cross_entropy_mean_per_gpu])
-
-                        tf.get_variable_scope().reuse_variables()
-
-                        grads_per_gpu = opt.compute_gradients(loss_per_gpu, tf.global_variables())
-                        tower_grads.append(grads_per_gpu)
-
-                        # logits_list.append(logits_per_gpu)
-
-                        # Reuse variables for the next tower.
-
-                        # Retain the summaries from the final tower.
-                        # summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
-
-        # regularization_losses_weights = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-        # grads_reg_weights = opt.compute_gradients(regularization_losses_weights, tf.global_variables())
-        # tower_grads.append(grads_reg_weights)
-
-        grads = average_gradients(tower_grads)
-
-        prelogits = tf.concat(prelogits_list, axis=0)
-
-        prelogits_norm = tf.add_n(prelogits_norm_list) / num_gpus
-        # tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
-        #                     prelogits_norm * args.prelogits_norm_loss_factor)
-
-        prelogits_center_loss = tf.add_n(prelogits_norm_list) / num_gpus
-        # tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
-        #                     prelogits_center_loss * args.center_loss_factor)
-
-        cross_entropy_mean = tf.add_n(cross_entropy_mean_list) / num_gpus
-        cross_entropy_mean = tf.identity(cross_entropy_mean, 'cross_entropy')
-        tf.add_to_collection('losses', cross_entropy_mean)
-
-        accuracy = tf.add_n(accuracy_list) / num_gpus
-
-        embeddings = tf.concat(embeddings_list, axis=0)
-
-        # Calculate the total losses
-        regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) + \
-                                [prelogits_norm * args.prelogits_norm_loss_factor] + \
-                                [prelogits_center_loss * args.center_loss_factor]
-        total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
+        grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
+            accuracy, embeddings, regularization_losses, total_loss = \
+            compute_loss_grads_multigpu(args, batch_size_placeholder, phase_train_placeholder, train_set,
+                                        nrof_classes, image_batch, label_batch, network, opt)
 
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
         train_op = train_facenet(opt, grads, total_loss, global_step, args.moving_average_decay, args.log_histograms)
@@ -351,7 +238,7 @@ def main(args):
                 print('Saving statistics')
                 with h5py.File(stat_file_name, 'w') as f:
                     # XN: iteritems is not supported in Python3. Use items instead.
-                    #for key, value in stat.iteritems():
+                    # for key, value in stat.iteritems():
                     for key, value in stat.items():
                         f.create_dataset(key, data=value)
     
@@ -644,7 +531,136 @@ def train_facenet(opt, grads, total_loss, global_step, moving_average_decay, log
         train_op = tf.no_op(name='train')
 
     return train_op
-  
+
+def get_opt(optimizer, learning_rate):
+    if optimizer == 'ADAGRAD':
+        opt = tf.train.AdagradOptimizer(learning_rate)
+    elif optimizer == 'ADADELTA':
+        opt = tf.train.AdadeltaOptimizer(learning_rate, rho=0.9, epsilon=1e-6)
+    elif optimizer == 'ADAM':
+        opt = tf.train.AdamOptimizer(learning_rate, beta1=0.9, beta2=0.999, epsilon=0.1)
+    elif optimizer == 'RMSPROP':
+        opt = tf.train.RMSPropOptimizer(learning_rate, decay=0.9, momentum=0.9, epsilon=1.0)
+    elif optimizer == 'MOM':
+        opt = tf.train.MomentumOptimizer(learning_rate, 0.9, use_nesterov=True)
+    else:
+        raise ValueError('Invalid optimization algorithm')
+    return opt
+
+def compute_loss_grads_multigpu(args, batch_size_placeholder, phase_train_placeholder, train_set,
+                                nrof_classes, image_batch, label_batch, network, opt):
+
+
+    num_gpus = args.num_gpus
+    batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
+    prelogits_list = []
+    prelogits_norm_list = []
+    prelogits_center_loss_list = []
+    cross_entropy_mean_list = []
+    accuracy_list = []
+    embeddings_list = []
+    tower_grads = []
+
+    with tf.variable_scope(tf.get_variable_scope()):
+        for i in range(num_gpus):
+            with tf.device('/gpu:%d' % i), tf.name_scope('%s_%d' % ('tower', i)):
+                # with tf.device('/cpu:%d' % 0):
+                with slim.arg_scope([slim.model_variable, slim.variable], device='/cpu:0'):
+                    begin = batch_size_per_gpu * i
+                    end = batch_size_per_gpu * i + batch_size_per_gpu
+                    image_batch_per_gpu = image_batch[begin:end]
+                    image_batch_per_gpu = image_batch_per_gpu
+                    label_batch_per_gpu = label_batch[begin:end]
+
+                    # Build the inference graph
+                    prelogits_per_gpu, _ = network.inference(image_batch_per_gpu, args.keep_probability,
+                                                             phase_train=phase_train_placeholder,
+                                                             bottleneck_layer_size=args.embedding_size,
+                                                             weight_decay=args.weight_decay)
+                    prelogits_list.append(prelogits_per_gpu)
+                    logits_per_gpu = slim.fully_connected(prelogits_per_gpu, len(train_set), activation_fn=None,
+                                                          weights_initializer=slim.initializers.xavier_initializer(),
+                                                          weights_regularizer=slim.l2_regularizer(args.weight_decay),
+                                                          scope='Logits', reuse=False)
+                    embeddings_per_gpu = tf.nn.l2_normalize(prelogits_per_gpu, 1, 1e-10, name='embeddings')
+                    embeddings_list.append(embeddings_per_gpu)
+
+                    # Norm for the prelogits
+                    eps = 1e-4
+                    prelogits_norm_per_gpu = tf.reduce_mean(
+                        tf.norm(tf.abs(prelogits_per_gpu) + eps, ord=args.prelogits_norm_p, axis=1))
+                    prelogits_norm_list.append(prelogits_norm_per_gpu)
+
+                    # Add center loss
+                    prelogits_center_loss_per_gpu, _ = facenet.center_loss(prelogits_per_gpu, label_batch_per_gpu,
+                                                                           args.center_loss_alfa,
+                                                                           nrof_classes)
+                    prelogits_center_loss_list.append(prelogits_center_loss_per_gpu)
+
+                    # Calculate the average cross entropy loss across the batch
+                    cross_entropy_per_gpu = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                        labels=label_batch_per_gpu, logits=logits_per_gpu, name='cross_entropy_per_example')
+                    cross_entropy_mean_per_gpu = tf.reduce_mean(cross_entropy_per_gpu)
+                    cross_entropy_mean_list.append(cross_entropy_mean_per_gpu)
+
+                    correct_prediction_per_gpu = tf.cast(
+                        tf.equal(tf.argmax(logits_per_gpu, 1), tf.cast(label_batch_per_gpu, tf.int64)),
+                        tf.float32)
+                    accuracy_per_gpu = tf.reduce_mean(correct_prediction_per_gpu)
+                    accuracy_list.append(accuracy_per_gpu)
+
+                    # duplicate calculation for regularization_losses, to be improved.
+                    # regularization_losses_tmp = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+                    loss_per_gpu = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) +
+                                            [prelogits_norm_per_gpu * args.prelogits_norm_loss_factor] +
+                                            [prelogits_center_loss_per_gpu * args.center_loss_factor] +
+                                            [cross_entropy_mean_per_gpu])
+
+                    # Reuse variables for the next tower.
+                    tf.get_variable_scope().reuse_variables()
+
+                    # Compute gradients.
+                    grads_per_gpu = opt.compute_gradients(loss_per_gpu, tf.global_variables())
+                    tower_grads.append(grads_per_gpu)
+
+                    # Retain the summaries from the final tower.
+                    # summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+
+    # regularization_losses_weights = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+    # grads_reg_weights = opt.compute_gradients(regularization_losses_weights, tf.global_variables())
+    # tower_grads.append(grads_reg_weights)
+
+    grads = average_gradients(tower_grads)
+
+    prelogits = tf.concat(prelogits_list, axis=0)
+
+    prelogits_norm = tf.add_n(prelogits_norm_list) / num_gpus
+    # tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
+    #                     prelogits_norm * args.prelogits_norm_loss_factor)
+
+    prelogits_center_loss = tf.add_n(prelogits_norm_list) / num_gpus
+    # tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES,
+    #                     prelogits_center_loss * args.center_loss_factor)
+
+    cross_entropy_mean = tf.add_n(cross_entropy_mean_list) / num_gpus
+    cross_entropy_mean = tf.identity(cross_entropy_mean, 'cross_entropy')
+    tf.add_to_collection('losses', cross_entropy_mean)
+
+    accuracy = tf.add_n(accuracy_list) / num_gpus
+
+    embeddings = tf.concat(embeddings_list, axis=0)
+
+    # Calculate the total losses
+    regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES) + \
+                            [prelogits_norm * args.prelogits_norm_loss_factor] + \
+                            [prelogits_center_loss * args.center_loss_factor]
+    total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
+
+    # return prelogits_list, embeddings_list, prelogits_norm_list, prelogits_center_loss_list, \
+    #        cross_entropy_mean_list, accuracy_list, tower_grads
+    return grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
+           accuracy, embeddings, regularization_losses, total_loss
+
 
 def parse_arguments(argv):
     parser = argparse.ArgumentParser()
@@ -745,8 +761,6 @@ def parse_arguments(argv):
 
     parser.add_argument('--num_gpus', type=int,
         help='Number of GPUs to use', default=1)
-    parser.add_argument('--nrof_preprocess_threads', type=int,
-                        help='Number of preprocessing threads', default=4)
 
     return parser.parse_args(argv)
   
