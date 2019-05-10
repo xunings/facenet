@@ -152,7 +152,7 @@ def main(args):
 
         grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
             accuracy, embeddings, regularization_losses, total_loss = \
-            compute_loss_grads_multigpu(args, batch_size_placeholder, phase_train_placeholder, train_set,
+            compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                                         nrof_classes, image_batch, label_batch, network, opt)
 
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
@@ -546,12 +546,12 @@ def get_opt(optimizer, learning_rate):
         raise ValueError('Invalid optimization algorithm')
     return opt
 
-def compute_loss_grads_multigpu(args, batch_size_placeholder, phase_train_placeholder, train_set,
+def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                                 nrof_classes, image_batch, label_batch, network, opt):
 
 
     num_gpus = args.num_gpus
-    batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
+    # batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
     prelogits_list = []
     prelogits_norm_list = []
     prelogits_center_loss_list = []
@@ -565,11 +565,11 @@ def compute_loss_grads_multigpu(args, batch_size_placeholder, phase_train_placeh
             with tf.device('/gpu:%d' % i), tf.name_scope('%s_%d' % ('tower', i)):
                 # with tf.device('/cpu:%d' % 0):
                 with slim.arg_scope([slim.model_variable, slim.variable], device='/cpu:0'):
-                    begin = batch_size_per_gpu * i
-                    end = batch_size_per_gpu * i + batch_size_per_gpu
-                    image_batch_per_gpu = image_batch[begin:end]
-                    image_batch_per_gpu = image_batch_per_gpu
-                    label_batch_per_gpu = label_batch[begin:end]
+                    image_batch_per_gpu = image_batch[i::num_gpus]
+                    label_batch_per_gpu = label_batch[i::num_gpus]
+                    image_batch_per_gpu = tf.identity(image_batch_per_gpu, 'image_batch')
+                    image_batch_per_gpu = tf.identity(image_batch_per_gpu, 'input')
+                    label_batch_per_gpu = tf.identity(label_batch_per_gpu, 'label_batch')
 
                     # Build the inference graph
                     prelogits_per_gpu, _ = network.inference(image_batch_per_gpu, args.keep_probability,
