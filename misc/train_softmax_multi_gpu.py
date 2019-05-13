@@ -151,7 +151,7 @@ def main(args):
         opt = get_opt(args.optimizer, learning_rate)
 
         grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
-            accuracy, embeddings, regularization_losses, total_loss = \
+            accuracy, embeddings, regularization_losses, total_loss, label_batch = \
             compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                                         nrof_classes, image_batch, label_batch, network, opt)
 
@@ -559,6 +559,7 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
     accuracy_list = []
     embeddings_list = []
     tower_grads = []
+    label_list = []
 
     with tf.variable_scope(tf.get_variable_scope()):
         for i in range(num_gpus):
@@ -570,6 +571,7 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                     image_batch_per_gpu = tf.identity(image_batch_per_gpu, 'image_batch')
                     image_batch_per_gpu = tf.identity(image_batch_per_gpu, 'input')
                     label_batch_per_gpu = tf.identity(label_batch_per_gpu, 'label_batch')
+                    label_list.append(label_batch_per_gpu)
 
                     # Build the inference graph
                     prelogits_per_gpu, _ = network.inference(image_batch_per_gpu, args.keep_probability,
@@ -629,6 +631,10 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
     # grads_reg_weights = opt.compute_gradients(regularization_losses_weights, tf.global_variables())
     # tower_grads.append(grads_reg_weights)
 
+    # The labels are used for LFW evaluation later.
+    # So we rearrage the labels according to the strided slicing above.
+    label_batch = tf.concat(label_list, axis=0)
+
     grads = average_gradients(tower_grads)
 
     prelogits = tf.concat(prelogits_list, axis=0)
@@ -659,7 +665,7 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
     # return prelogits_list, embeddings_list, prelogits_norm_list, prelogits_center_loss_list, \
     #        cross_entropy_mean_list, accuracy_list, tower_grads
     return grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
-           accuracy, embeddings, regularization_losses, total_loss
+           accuracy, embeddings, regularization_losses, total_loss, label_batch
 
 
 def parse_arguments(argv):
