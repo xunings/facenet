@@ -53,12 +53,17 @@ def inference(images, keep_probability=None, phase_train=True,
         with slim.arg_scope([slim.batch_norm], updates_collections=None):
             net, endpoints = resnet_v2.resnet_v2_50(images, is_training=phase_train, reuse=reuse)
             net = tf.squeeze(net, axis=[1,2])
-            with slim.arg_scope([slim.fully_connected],
-                                weights_initializer=slim.initializers.xavier_initializer(),
-                                weights_regularizer=slim.l2_regularizer(weight_decay),
-                                normalizer_fn=slim.batch_norm,
-                                normalizer_params=batch_norm_params):
-                net = slim.fully_connected(net, bottleneck_layer_size, activation_fn=None,
-                                           scope='Bottleneck', reuse=False)
+            net = slim.dropout(net, keep_probability, is_training=phase_train,
+                               scope='Dropout')
+            endpoints['PreLogitsFlatten'] = net
+            net = slim.fully_connected(net,
+                                       bottleneck_layer_size,
+                                       weights_initializer=slim.initializers.xavier_initializer(),
+                                       weights_regularizer=slim.l2_regularizer(weight_decay),
+                                       normalizer_fn=slim.batch_norm,
+                                       normalizer_params=batch_norm_params,
+                                       activation_fn=None,
+                                       scope='Bottleneck',
+                                       reuse=False)
 
     return net, endpoints
