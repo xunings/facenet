@@ -39,6 +39,13 @@ _BATCH_NORM_DECAY = 0.997
 _BATCH_NORM_EPSILON = 1e-5
 DEFAULT_VERSION = 2
 
+# Modified from
+def l2_regularizer(scale):
+
+  def l2(weights):
+      return scale * tf.nn.l2_loss(weights)
+
+  return l2
 
 ################################################################################
 # Convenience functions for building the ResNet model.
@@ -80,7 +87,7 @@ def fixed_padding(inputs, kernel_size, data_format):
   return padded_inputs
 
 
-def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format):
+def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format, weight_decay):
   """Strided 2-D convolution with explicit padding."""
   # The padding is consistent and is based only on `kernel_size`, not on the
   # dimensions of `inputs` (as opposed to using `tf.layers.conv2d` alone).
@@ -91,7 +98,7 @@ def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format):
       inputs=inputs, filters=filters, kernel_size=kernel_size, strides=strides,
       padding=('SAME' if strides == 1 else 'VALID'), use_bias=False,
       kernel_initializer=tf.variance_scaling_initializer(),
-      data_format=data_format)
+      data_format=data_format, kernel_regularizer=l2_regularizer(weight_decay))
 
 
 ################################################################################
@@ -144,7 +151,7 @@ def _building_block_v1(inputs, filters, training, projection_shortcut, strides,
 
 
 def _building_block_v2(inputs, filters, training, projection_shortcut, strides,
-                       data_format):
+                       data_format, weight_decay):
   """
   Batch normalization then ReLu then convolution as described by:
     Identity Mappings in Deep Residual Networks
@@ -177,13 +184,13 @@ def _building_block_v2(inputs, filters, training, projection_shortcut, strides,
 
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=strides,
-      data_format=data_format)
+      data_format=data_format, weight_decay=weight_decay)
 
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=1,
-      data_format=data_format)
+      data_format=data_format, weight_decay=weight_decay)
 
   return inputs + shortcut
 
@@ -228,7 +235,7 @@ def _bottleneck_block_v1(inputs, filters, training, projection_shortcut,
 
 
 def _bottleneck_block_v2(inputs, filters, training, projection_shortcut,
-                         strides, data_format):
+                         strides, data_format, weight_decay):
   """
   Similar to _building_block_v2(), except using the "bottleneck" blocks
   described in:
@@ -254,25 +261,25 @@ def _bottleneck_block_v2(inputs, filters, training, projection_shortcut,
 
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=1, strides=1,
-      data_format=data_format)
+      data_format=data_format, weight_decay=weight_decay)
 
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=strides,
-      data_format=data_format)
+      data_format=data_format, weight_decay=weight_decay)
 
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=4 * filters, kernel_size=1, strides=1,
-      data_format=data_format)
+      data_format=data_format, weight_decay=weight_decay)
 
   return inputs + shortcut
 
 
 def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
-                training, name, data_format):
+                training, name, data_format, weight_decay):
   """Creates one layer of blocks for the ResNet model.
 
   Args:
@@ -300,14 +307,14 @@ def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
   def projection_shortcut(inputs):
     return conv2d_fixed_padding(
         inputs=inputs, filters=filters_out, kernel_size=1, strides=strides,
-        data_format=data_format)
+        data_format=data_format, weight_decay=weight_decay)
 
   # Only the first block per block_layer uses projection_shortcut and strides
   inputs = block_fn(inputs, filters, training, projection_shortcut, strides,
-                    data_format)
+                    data_format, weight_decay)
 
   for _ in range(1, blocks):
-    inputs = block_fn(inputs, filters, training, None, 1, data_format)
+    inputs = block_fn(inputs, filters, training, None, 1, data_format, weight_decay)
 
   return tf.identity(inputs, name)
 
@@ -320,7 +327,7 @@ class Model(object):
                kernel_size,
                conv_stride, first_pool_size, first_pool_stride,
                second_pool_size, second_pool_stride, block_sizes, block_strides,
-               final_size, version=DEFAULT_VERSION, data_format=None):
+               final_size, version=DEFAULT_VERSION, data_format=None, weight_decay=0.0):
     """Creates a model for classifying an image.
 
     Args:
@@ -384,6 +391,7 @@ class Model(object):
     self.block_sizes = block_sizes
     self.block_strides = block_strides
     self.final_size = final_size
+    self.weight_decay = weight_decay
 
   def __call__(self, inputs, training):
     """Add operations to classify a batch of input images.
@@ -405,7 +413,7 @@ class Model(object):
 
     inputs = conv2d_fixed_padding(
         inputs=inputs, filters=self.num_filters, kernel_size=self.kernel_size,
-        strides=self.conv_stride, data_format=self.data_format)
+        strides=self.conv_stride, data_format=self.data_format, weight_decay=self.weight_decay)
     inputs = tf.identity(inputs, 'initial_conv')
 
     if self.first_pool_size:
@@ -421,18 +429,21 @@ class Model(object):
           inputs=inputs, filters=num_filters, bottleneck=self.bottleneck,
           block_fn=self.block_fn, blocks=num_blocks,
           strides=self.block_strides[i], training=training,
-          name='block_layer{}'.format(i + 1), data_format=self.data_format)
+          name='block_layer{}'.format(i + 1), data_format=self.data_format,
+          weight_decay=self.weight_decay)
 
     inputs = batch_norm(inputs, training, self.data_format)
     inputs = tf.nn.relu(inputs)
-    inputs = tf.layers.average_pooling2d(
-        inputs=inputs, pool_size=self.second_pool_size,
-        strides=self.second_pool_stride, padding='VALID',
-        data_format=self.data_format)
+    inputs = tf.reduce_mean(inputs, axis=[2,3])
+    # inputs = tf.layers.average_pooling2d(
+    #     inputs=inputs, pool_size=self.second_pool_size,
+    #     strides=self.second_pool_stride, padding='VALID',
+    #     data_format=self.data_format)
     inputs = tf.identity(inputs, 'final_avg_pool')
 
     inputs = tf.reshape(inputs, [-1, self.final_size])
-    inputs = tf.layers.dense(inputs=inputs, units=self.num_classes)
+    inputs = tf.layers.dense(inputs=inputs, units=self.num_classes,
+                             kernel_regularizer=l2_regularizer(self.weight_decay))
     inputs = tf.identity(inputs, 'final_dense')
     return inputs
 
