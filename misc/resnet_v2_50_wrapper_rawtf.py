@@ -74,8 +74,4 @@ def inference(images, keep_probability=1.0, phase_train=True,
     resnet_size = 50
     model = FacenetModel(resnet_size, emb_size=bottleneck_layer_size, weight_decay=weight_decay)
     prelogits = model(images, training=phase_train)
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    dummy = True
-    with tf.control_dependencies(update_ops):
-        return prelogits, dummy
-
+    return prelogits, None
