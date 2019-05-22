@@ -43,6 +43,7 @@ import tensorflow.contrib.slim as slim
 from tensorflow.python.ops import data_flow_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
+from facenet_helper import l2_regularizer
 
 def main(args):
   
@@ -550,12 +551,20 @@ def get_opt(optimizer, learning_rate):
         raise ValueError('Invalid optimization algorithm')
     return opt
 
+def is_slim(model_name):
+    if model_name.endswith('inception_resnet_v1') or \
+            model_name.endswith('slim'):
+        return True
+    else:
+        return False
+
 def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                                 nrof_classes, image_batch, label_batch, network, opt):
 
 
     num_gpus = args.num_gpus
-    # batch_size_per_gpu = tf.cast(batch_size_placeholder / num_gpus, dtype=tf.int32)
+    use_slim = is_slim(args.model_def)
+    var_device = '/cpu:0' if num_gpus > 1 else '/gpu:0'
     prelogits_list = []
     prelogits_norm_list = []
     prelogits_center_loss_list = []
@@ -568,8 +577,7 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
     with tf.variable_scope(tf.get_variable_scope()):
         for i in range(num_gpus):
             with tf.device('/gpu:%d' % i), tf.name_scope('%s_%d' % ('tower', i)):
-                # with tf.device('/cpu:%d' % 0):
-                with slim.arg_scope([slim.model_variable, slim.variable], device='/cpu:0'):
+                with slim.arg_scope([slim.model_variable, slim.variable], device=var_device):
                     image_batch_per_gpu = image_batch[i::num_gpus]
                     label_batch_per_gpu = label_batch[i::num_gpus]
                     image_batch_per_gpu = tf.identity(image_batch_per_gpu, 'image_batch')
@@ -583,10 +591,17 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                                                              bottleneck_layer_size=args.embedding_size,
                                                              weight_decay=args.weight_decay)
                     prelogits_list.append(prelogits_per_gpu)
-                    logits_per_gpu = slim.fully_connected(prelogits_per_gpu, len(train_set), activation_fn=None,
-                                                          weights_initializer=slim.initializers.xavier_initializer(),
-                                                          weights_regularizer=slim.l2_regularizer(args.weight_decay),
-                                                          scope='Logits', reuse=False)
+                    if use_slim:
+                        logits_per_gpu = slim.fully_connected(prelogits_per_gpu, len(train_set), activation_fn=None,
+                                                            weights_initializer=slim.initializers.xavier_initializer(),
+                                                            weights_regularizer=slim.l2_regularizer(args.weight_decay),
+                                                            scope='Logits', reuse=False)
+                    else:
+                        logits_per_gpu = tf.layers.dense(inputs=prelogits_per_gpu, units=len(train_set),
+                                                         activation=None,
+                                                         kernel_regularizer=l2_regularizer(args.weight_decay),
+                                                         name='Logits')
+                        # logits_per_gpu = tf.identity(logits_per_gpu, 'Logits')
                     embeddings_per_gpu = tf.nn.l2_normalize(prelogits_per_gpu, 1, 1e-10, name='embeddings')
                     embeddings_list.append(embeddings_per_gpu)
 
@@ -631,10 +646,6 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
                     # Retain the summaries from the final tower.
                     # summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-    # regularization_losses_weights = tf.add_n(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-    # grads_reg_weights = opt.compute_gradients(regularization_losses_weights, tf.global_variables())
-    # tower_grads.append(grads_reg_weights)
-
     # The labels are used for LFW evaluation later.
     # So we rearrage the labels according to the strided slicing above.
     label_batch = tf.concat(label_list, axis=0)
@@ -670,6 +681,8 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
     #        cross_entropy_mean_list, accuracy_list, tower_grads
     return grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
            accuracy, embeddings, regularization_losses, total_loss, label_batch
+
+
 
 
 def parse_arguments(argv):

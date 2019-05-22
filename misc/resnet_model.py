@@ -33,21 +33,13 @@ from __future__ import print_function
 
 
 import tensorflow as tf
-
+from facenet_helper import l2_regularizer
 
 _BATCH_NORM_DECAY = 0.997
 _BATCH_NORM_EPSILON = 1e-5
 DEFAULT_VERSION = 2
 
-# Modified from
-def l2_regularizer(scale):
-
-  def l2(weights):
-      return scale * tf.nn.l2_loss(weights)
-
-  return l2
-
-################################################################################
+###############################################################################
 # Convenience functions for building the ResNet model.
 ################################################################################
 def batch_norm(inputs, training, data_format):
