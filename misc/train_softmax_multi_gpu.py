@@ -221,7 +221,8 @@ def main(args):
                 if len(val_image_list)>0 and ((epoch-1) % args.validate_every_n_epochs == args.validate_every_n_epochs-1 or epoch==args.max_nrof_epochs):
                     validate(args, sess, epoch, val_image_list, val_label_list, enqueue_op, image_paths_placeholder, labels_placeholder, control_placeholder,
                         phase_train_placeholder, batch_size_placeholder, 
-                        stat, total_loss, regularization_losses, cross_entropy_mean, accuracy, args.validate_every_n_epochs, args.use_fixed_image_standardization)
+                        stat, total_loss, regularization_losses, cross_entropy_mean, accuracy, args.validate_every_n_epochs, args.use_fixed_image_standardization,
+                        summary_writer, step)
                 stat['time_validate'][epoch-1] = time.time() - t
 
                 # Save variables and the metagraph if it doesn't exist already
@@ -337,7 +338,8 @@ def train(args, sess, epoch, image_list, label_list, index_dequeue_op, enqueue_o
 
 def validate(args, sess, epoch, image_list, label_list, enqueue_op, image_paths_placeholder, labels_placeholder, control_placeholder,
              phase_train_placeholder, batch_size_placeholder, 
-             stat, loss, regularization_losses, cross_entropy_mean, accuracy, validate_every_n_epochs, use_fixed_image_standardization):
+             stat, loss, regularization_losses, cross_entropy_mean, accuracy, validate_every_n_epochs, use_fixed_image_standardization,
+             summary_writer, step):
   
     print('Running forward pass on validation set')
 
@@ -375,6 +377,13 @@ def validate(args, sess, epoch, image_list, label_list, enqueue_op, image_paths_
     print('Validation Epoch: %d\tTime %.3f\tLoss %2.3f\tXent %2.3f\tAccuracy %2.3f' %
           (epoch, duration, np.mean(loss_array), np.mean(xent_array), np.mean(accuracy_array)))
 
+    summary = tf.Summary()
+    summary.value.add(tag='val/loss', simple_value=np.mean(loss_array))
+    summary.value.add(tag='val/xent_loss', simple_value=np.mean(xent_array))
+    summary.value.add(tag='val/accuracy', simple_value=np.mean(accuracy_array))
+    summary.value.add(tag='time/validate', simple_value=duration)
+    summary_writer.add_summary(summary, step)
+
 
 def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phase_train_placeholder, batch_size_placeholder, control_placeholder, 
         embeddings, labels, image_paths, actual_issame, batch_size, nrof_folds, log_dir, step, summary_writer, stat, epoch, distance_metric, subtract_mean, use_flipped_images, use_fixed_image_standardization):
@@ -401,6 +410,7 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
     nrof_batches = nrof_images // batch_size
     emb_array = np.zeros((nrof_images, embedding_size))
     lab_array = np.zeros((nrof_images,))
+    start_forward_time = time.time()
     for i in range(nrof_batches):
         feed_dict = {phase_train_placeholder:False, batch_size_placeholder:batch_size}
         emb, lab = sess.run([embeddings, labels], feed_dict=feed_dict)
@@ -410,6 +420,8 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
             print('.', end='')
             sys.stdout.flush()
     print('')
+    # time for embedding vector calculation
+    lfw_forward_time = time.time() - start_forward_time
     embeddings = np.zeros((nrof_embeddings, embedding_size*nrof_flips))
     if use_flipped_images:
         # Concatenate embeddings for flipped and non flipped version of the images
@@ -430,6 +442,7 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
     summary.value.add(tag='lfw/accuracy', simple_value=np.mean(accuracy))
     summary.value.add(tag='lfw/val_rate', simple_value=val)
     summary.value.add(tag='time/lfw', simple_value=lfw_time)
+    summary.value.add(tag='time/lfw_forward', simple_value=lfw_forward_time)
     summary_writer.add_summary(summary, step)
     with open(os.path.join(log_dir,'lfw_result.txt'),'at') as f:
         f.write('%d\t%.5f\t%.5f\n' % (step, np.mean(accuracy), val))
@@ -681,8 +694,6 @@ def compute_loss_grads_multigpu(args, phase_train_placeholder, train_set,
     #        cross_entropy_mean_list, accuracy_list, tower_grads
     return grads, prelogits, prelogits_norm, prelogits_center_loss, cross_entropy_mean, \
            accuracy, embeddings, regularization_losses, total_loss, label_batch
-
-
 
 
 def parse_arguments(argv):
