@@ -10,13 +10,6 @@ def main(args):
     if args.key != '':
         print(list(f[args.key]))
 
-    # List all groups
-    # print("Keys: %s" % f.keys())
-    #a_group_key = list(f.keys())[0]
-
-    # Get the data
-    #data = list(f[a_group_key])
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--filename', type=str, required=True)
