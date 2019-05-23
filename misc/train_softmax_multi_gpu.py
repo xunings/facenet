@@ -431,8 +431,17 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
         embeddings = emb_array
 
     assert np.array_equal(lab_array, np.arange(nrof_images))==True, 'Wrong labels used for evaluation, possibly caused by training examples left in the input pipeline'
-    _, _, accuracy, val, val_std, far = lfw.evaluate(embeddings, actual_issame, nrof_folds=nrof_folds, distance_metric=distance_metric, subtract_mean=subtract_mean)
-    
+    tpr, fpr, accuracy, val, val_std, far = lfw.evaluate(embeddings, actual_issame, nrof_folds=nrof_folds, distance_metric=distance_metric, subtract_mean=subtract_mean)
+    # LFW has the same number of matched and mismatched pairs,
+    # so acc = (tpr+tnr)/2
+    # tnr = 1 - fpr
+    acc = (tpr + 1 - fpr) / 2.0
+    best_idx = np.argmax(acc)
+    thresholds = np.arange(0, 4, 0.01)
+    best_threshold = thresholds[best_idx]
+    tpr_best_threshold = tpr[best_idx]
+    fpr_best_threshold = fpr[best_idx]
+
     print('Accuracy: %2.5f+-%2.5f' % (np.mean(accuracy), np.std(accuracy)))
     print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
     lfw_time = time.time() - start_time
@@ -441,6 +450,9 @@ def evaluate(sess, enqueue_op, image_paths_placeholder, labels_placeholder, phas
     #pylint: disable=maybe-no-member
     summary.value.add(tag='lfw/accuracy', simple_value=np.mean(accuracy))
     summary.value.add(tag='lfw/val_rate', simple_value=val)
+    summary.value.add(tag='lfw/best_thres', simple_value=best_threshold)
+    summary.value.add(tag='lfw/tpr_best_thres', simple_value=tpr_best_threshold)
+    summary.value.add(tag='lfw/fpr_best_thres', simple_value=fpr_best_threshold)
     summary.value.add(tag='time/lfw', simple_value=lfw_time)
     summary.value.add(tag='time/lfw_forward', simple_value=lfw_forward_time)
     summary_writer.add_summary(summary, step)
