@@ -100,7 +100,7 @@ RANDOM_CROP = 2
 RANDOM_FLIP = 4
 FIXED_STANDARDIZATION = 8
 FLIP = 16
-def create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batch_size_placeholder):
+def create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batch_size_placeholder, model_image_size=0):
     images_and_labels_list = []
     for _ in range(nrof_preprocess_threads):
         filenames, label, control = input_queue.dequeue()
@@ -129,6 +129,9 @@ def create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batc
                             lambda:tf.image.flip_left_right(image),
                             lambda:tf.identity(image))
             #pylint: disable=no-member
+            if model_image_size > 0:
+                image = tf.image.resize_images(image, (model_image_size, model_image_size))
+                image_size = (model_image_size, model_image_size)
             image.set_shape(image_size + (3,))
             images.append(image)
         images_and_labels_list.append([images, label])

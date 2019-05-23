@@ -132,7 +132,8 @@ def main(args):
                                     shared_name=None, name=None)
         enqueue_op = input_queue.enqueue_many([image_paths_placeholder, labels_placeholder, control_placeholder], name='enqueue_op')
 
-        image_batch, label_batch = facenet.create_input_pipeline(input_queue, image_size, nrof_preprocess_threads, batch_size_placeholder)
+        image_batch, label_batch = facenet.create_input_pipeline(input_queue, image_size, nrof_preprocess_threads,
+                                                                 batch_size_placeholder, args.model_image_size)
 
         image_batch = tf.identity(image_batch, 'image_batch')
         image_batch = tf.identity(image_batch, 'input')
@@ -807,6 +808,9 @@ def parse_arguments(argv):
 
     parser.add_argument('--num_gpus', type=int,
         help='Number of GPUs to use', default=1)
+    parser.add_argument('--model_image_size', type=int,
+        help='Images will be resized to this number of (height, width) in pixels for the NN model. 0 means no resizing',
+                        default=0)
 
     return parser.parse_args(argv)
   
